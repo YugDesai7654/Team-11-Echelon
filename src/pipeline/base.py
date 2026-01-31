@@ -3,7 +3,7 @@ Base classes and data structures for the pipeline.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Optional, Dict, Any, List
 from PIL import Image
 from enum import Enum
@@ -95,6 +95,30 @@ class PipelineResult:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
+        
+        def sanitize_data(data: Any) -> Any:
+            """Recursively remove non-serializable objects like PIL Images."""
+            if isinstance(data, dict):
+                return {k: sanitize_data(v) for k, v in data.items() if k != "video_frames"}
+            elif isinstance(data, list):
+                if data and isinstance(data[0], Image.Image):
+                    return f"<List of {len(data)} Images>"
+                return [sanitize_data(i) for i in data]
+            elif isinstance(data, Image.Image):
+                return f"<Image {data.size} {data.mode}>"
+            elif isinstance(data, Enum):
+                return data.value
+            return data
+
+        results_dict = {}
+        for k, v in self.stage_results.items():
+            stage_dict = asdict(v)
+            stage_dict["stage_type"] = v.stage_type.value # Ensure Enum is serialized
+            stage_dict["data"] = sanitize_data(stage_dict["data"])
+            results_dict[k.value] = stage_dict
+
+        sanitized_raw = sanitize_data(self.raw_data)
+
         return {
             "verdict": self.verdict,
             "truthfulness_score": self.truthfulness_score,
@@ -106,7 +130,8 @@ class PipelineResult:
             "context_score": self.context_score,
             "robustness_score": self.robustness_score,
             "stages_executed": [s.value for s in self.stage_results.keys()],
-            "raw_data": self.raw_data,
+            "stage_results": results_dict,
+            "raw_data": sanitized_raw,
         }
 
 
