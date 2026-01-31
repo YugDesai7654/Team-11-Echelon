@@ -180,8 +180,8 @@ def display_deliverable_results(pipeline_result, has_image):
                 st.metric("Raw Score", f"{data.get('text_detection', {}).get('raw_score', 0):.4f}")
             
             if has_image:
-                st.markdown("#### 🖼️ AI Image Detection")
-                if data.get('image_detection'):
+                st.markdown("#### 🖼️ AI Image Detection (SigLIP)")
+                if data.get('ai_image_detection') or data.get('image_detection'):
                     col1, col2 = st.columns(2)
                     with col1:
                         ai_img_prob = data.get('ai_image_probability', 0)
@@ -191,14 +191,32 @@ def display_deliverable_results(pipeline_result, has_image):
                     with col2:
                         is_ai = data.get('is_ai_image', False)
                         st.metric("Detection", "AI Generated" if is_ai else "Natural Image")
-                    
-                    artifacts = data.get('image_artifacts', [])
-                    if artifacts:
-                        st.warning("**🔍 Detected Artifacts:**")
-                        for artifact in artifacts[:5]:
-                            st.markdown(f"- {artifact}")
                 else:
-                    st.info("No AI artifacts detected in image")
+                    st.info("No AI image detection performed")
+                
+                st.markdown("#### 🎭 Deepfake Detection (ViT)")
+                if data.get('deepfake_detection'):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        df_prob = data.get('deepfake_probability', 0)
+                        st.metric("Deepfake Probability", f"{df_prob:.1%}",
+                                 delta="🚨 Deepfake" if data.get('is_deepfake') else "✅ Authentic",
+                                 delta_color="inverse" if data.get('is_deepfake') else "normal")
+                    with col2:
+                        is_df = data.get('is_deepfake', False)
+                        st.metric("Face Analysis", "Manipulated" if is_df else "Real Face")
+                    
+                    if data.get('is_deepfake'):
+                        st.error("🚨 **Warning**: This image may contain face manipulation or deepfake content!")
+                else:
+                    st.info("ℹ️ Deepfake detection not available")
+                
+                # Combined artifacts
+                artifacts = data.get('image_artifacts', [])
+                if artifacts:
+                    st.warning("**🔍 Detected Artifacts:**")
+                    for artifact in artifacts[:5]:
+                        st.markdown(f"- {artifact}")
             
             st.markdown("#### 📊 Overall Synthetic Score")
             overall = data.get('overall_synthetic_score', 0)
@@ -467,7 +485,7 @@ def main():
                 
                 # Quick summary metrics
                 st.markdown("### 📊 Quick Summary")
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
                     st.metric("Cross-Modal", f"{pipeline_result.cross_modal_score:.3f}")
                 with col2:
@@ -475,6 +493,10 @@ def main():
                 with col3:
                     st.metric("AI Image", f"{pipeline_result.ai_image_probability:.1%}")
                 with col4:
+                    # Get deepfake probability from raw data
+                    deepfake_prob = pipeline_result.raw_data.get('stage_results', {}).get('synthetic_detection', {}).get('deepfake_probability', 0)
+                    st.metric("Deepfake", f"{deepfake_prob:.1%}")
+                with col5:
                     st.metric("Robustness", f"{pipeline_result.robustness_score:.1%}")
                 
                 # Display detailed results for each deliverable

@@ -85,16 +85,42 @@ class SyntheticDetectorStage(PipelineStage):
             
             # Detect AI image if image is provided
             if pipeline_input.image is not None:
-                print("Running AI Image Detection (Gemini)...")
-                image_result = self._detect_ai_image(pipeline_input.image)
-                data["image_detection"] = image_result
-                data["ai_image_probability"] = image_result.get("confidence_score", 0.0)
-                data["is_ai_image"] = image_result.get("is_ai_generated", False)
-                data["image_artifacts"] = image_result.get("artifacts", [])
+                # 1. SigLIP: General AI-generated image detection (DALL-E, Midjourney, etc.)
+                print("Running AI Image Detection (SigLIP)...")
+                ai_image_result = self._detect_ai_image(pipeline_input.image)
+                data["ai_image_detection"] = ai_image_result
+                data["ai_image_probability"] = ai_image_result.get("confidence_score", 0.0)
+                data["is_ai_image"] = ai_image_result.get("is_ai_generated", False)
+                
+                # 2. ViT Deepfake: Face manipulation detection
+                print("Running Deepfake Detection (ViT)...")
+                deepfake_result = self._detect_deepfake(pipeline_input.image)
+                data["deepfake_detection"] = deepfake_result
+                data["deepfake_probability"] = deepfake_result.get("deepfake_probability", 0.0)
+                data["is_deepfake"] = deepfake_result.get("is_deepfake", False)
+                
+                # Combine artifacts from both detectors
+                artifacts = []
+                if ai_image_result.get("is_ai_generated"):
+                    artifacts.append("AI-generated image patterns detected (SigLIP)")
+                if deepfake_result.get("is_deepfake"):
+                    artifacts.append("Deepfake/face manipulation detected (ViT)")
+                data["image_artifacts"] = artifacts
+                
+                # Combined image detection (take the higher probability)
+                data["image_detection"] = {
+                    "ai_image": ai_image_result,
+                    "deepfake": deepfake_result
+                }
             else:
-                data["image_detection"] = None
+                data["ai_image_detection"] = None
+                data["deepfake_detection"] = None
                 data["ai_image_probability"] = 0.0
+                data["deepfake_probability"] = 0.0
                 data["is_ai_image"] = False
+                data["is_deepfake"] = False
+                data["image_artifacts"] = []
+                data["image_detection"] = None
             
             # Compute overall synthetic score
             data["overall_synthetic_score"] = self._compute_overall_score(data)
@@ -229,13 +255,77 @@ class SyntheticDetectorStage(PipelineStage):
                 "error": str(e)
             }
     
+    def _detect_deepfake(self, image: Image.Image) -> Dict:
+        """
+        Detect if image contains deepfake/face manipulation using ViT-based detector.
+        Model: dima806/deepfake_vs_real_image_detection
+        """
+        try:
+            import torch
+            from transformers import AutoImageProcessor, AutoModelForImageClassification
+            
+            MODEL_ID = "dima806/deepfake_vs_real_image_detection"
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            
+            # Load model and processor
+            processor = AutoImageProcessor.from_pretrained(MODEL_ID)
+            model = AutoModelForImageClassification.from_pretrained(MODEL_ID)
+            model.to(device)
+            model.eval()
+            
+            # Preprocess the image
+            rgb_image = image.convert("RGB")
+            inputs = processor(images=rgb_image, return_tensors="pt").to(device)
+            
+            # Run inference
+            with torch.no_grad():
+                outputs = model(**inputs)
+                logits = outputs.logits
+            
+            # Get predictions
+            predicted_class_idx = logits.argmax(-1).item()
+            predicted_label = model.config.id2label[predicted_class_idx]
+            
+            # Get probabilities
+            probabilities = torch.softmax(logits, dim=-1)
+            predicted_prob = probabilities[0, predicted_class_idx].item()
+            
+            # Get deepfake probability specifically
+            # Labels are typically 'Real' and 'Fake'
+            deepfake_prob = 0.0
+            for i, label in model.config.id2label.items():
+                if label.lower() in ["fake", "deepfake"]:
+                    deepfake_prob = probabilities[0, i].item()
+                    break
+            
+            is_deepfake = predicted_label.lower() in ["fake", "deepfake"]
+            
+            return {
+                "is_deepfake": is_deepfake,
+                "deepfake_probability": deepfake_prob,
+                "predicted_label": predicted_label,
+                "predicted_confidence": predicted_prob,
+            }
+            
+        except Exception as e:
+            print(f"  ⚠️ Deepfake Detection Error: {e}")
+            return {
+                "is_deepfake": False,
+                "deepfake_probability": 0.0,
+                "error": str(e)
+            }
+    
     def _compute_overall_score(self, data: Dict) -> float:
         """
         Compute overall synthetic media score.
         Higher score = more likely to be synthetic.
         """
         text_prob = data.get("ai_text_probability", 0.0)
-        image_prob = data.get("ai_image_probability", 0.0)
+        ai_image_prob = data.get("ai_image_probability", 0.0)
+        deepfake_prob = data.get("deepfake_probability", 0.0)
+        
+        # Take the maximum of AI image and deepfake probabilities
+        image_prob = max(ai_image_prob, deepfake_prob)
         
         # Weight text and image equally if both present
         if data.get("image_detection"):
