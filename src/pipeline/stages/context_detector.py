@@ -104,9 +104,15 @@ class ContextDetectorStage(PipelineStage):
             os.unlink(temp_file.name)
 
     def _reverse_image_search(self, image_url: str) -> Dict:
-        from serpapi import GoogleSearch
+        try:
+            from serpapi import GoogleSearch
+        except ImportError as e:
+            raise RuntimeError(
+                "Out-of-context detection requires the 'serpapi' module. "
+                "Install with: pip install google-search-results "
+                "(use the same Python/venv that runs Streamlit)"
+            ) from e
         import json
-        
         params = {"engine": "google_lens", "url": image_url, "api_key": self.api_key}
         search = GoogleSearch(params)
         results = search.get_dict()

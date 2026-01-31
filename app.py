@@ -1,12 +1,19 @@
 import streamlit as st
 import os
+import sys
+import subprocess
 from PIL import Image
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Import chat utilities
+try:
+    import serpapi
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "google-search-results"])
+    import serpapi
+
+from src.utils.chat_utils import get_chat_response, is_groq_available
 from src.utils.chat_utils import get_chat_response, is_groq_available
 
 def set_custom_style():
