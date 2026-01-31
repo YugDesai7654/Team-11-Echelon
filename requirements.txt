@@ -1,0 +1,11 @@
+streamlit
+torch
+transformers
+google-generativeai
+python-dotenv
+Pillow
+opencv-python
+numpy
+ftfy
+regex
+tqdm
