@@ -6,6 +6,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Import chat utilities
+from src.utils.chat_utils import get_chat_response, is_groq_available
+
 def set_custom_style():
     st.markdown("""
         <style>
@@ -377,6 +380,12 @@ def main():
     )
     
     set_custom_style()
+    
+    # Initialize session state for chat feature
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+    if "pipeline_result_for_chat" not in st.session_state:
+        st.session_state.pipeline_result_for_chat = None
 
     # Sidebar
     st.sidebar.title("🛡️ Echelon")
@@ -389,6 +398,13 @@ def main():
     else:
         st.sidebar.error("API Key Missing ❌")
         st.sidebar.info("Please set GOOGLE_API_KEY in .env")
+    
+    # Groq API key for chat feature
+    if is_groq_available():
+        st.sidebar.success("Groq API Key Detected ✅")
+    else:
+        st.sidebar.warning("Groq API Key Missing ⚠️")
+        st.sidebar.info("Set GROQ_API_KEY in .env for Chat feature")
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📋 Pipeline Deliverables")
@@ -505,6 +521,11 @@ def main():
                 # Raw data expander
                 with st.expander("🔧 View Raw Pipeline Data"):
                     st.json(pipeline_result.to_dict())
+                
+                # Store pipeline result in session state for chat feature
+                st.session_state.pipeline_result_for_chat = pipeline_result.to_dict()
+                # Clear previous chat when new analysis is run
+                st.session_state.chat_messages = []
                     
             except Exception as e:
                 progress_bar.empty()
@@ -514,6 +535,64 @@ def main():
 
         else:
             st.warning("Please enter a claim to verify.")
+    
+    # ═══════════════════════════════════════════════════════════════
+    # CHAT WITH EVIDENCE FEATURE
+    # ═══════════════════════════════════════════════════════════════
+    if st.session_state.pipeline_result_for_chat is not None:
+        st.markdown("---")
+        st.markdown("## 💬 Chat with Evidence")
+        st.markdown("*Ask follow-up questions about the analysis results*")
+        
+        # Check if Groq is available
+        if not is_groq_available():
+            st.warning("⚠️ **Chat feature unavailable**: Please set `GROQ_API_KEY` in your `.env` file to enable the Chat with Evidence feature.")
+        else:
+            # Display existing chat messages
+            for message in st.session_state.chat_messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+            
+            # Chat input
+            if prompt := st.chat_input("Ask about the analysis (e.g., 'Why is this considered fake?', 'What evidence supports this verdict?')"):
+                # Add user message to history
+                st.session_state.chat_messages.append({"role": "user", "content": prompt})
+                
+                # Display user message
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                
+                # Generate AI response
+                with st.chat_message("assistant"):
+                    with st.spinner("Analyzing evidence..."):
+                        try:
+                            # Get response from Groq
+                            response = get_chat_response(
+                                messages=st.session_state.chat_messages,
+                                pipeline_result=st.session_state.pipeline_result_for_chat
+                            )
+                            
+                            st.markdown(response)
+                            
+                            # Add assistant response to history
+                            st.session_state.chat_messages.append({
+                                "role": "assistant",
+                                "content": response
+                            })
+                            
+                        except Exception as e:
+                            error_msg = f"❌ Error generating response: {str(e)}"
+                            st.error(error_msg)
+                            st.session_state.chat_messages.append({
+                                "role": "assistant",
+                                "content": error_msg
+                            })
+            
+            # Clear chat button
+            if st.session_state.chat_messages:
+                if st.button("🗑️ Clear Chat History", key="clear_chat"):
+                    st.session_state.chat_messages = []
+                    st.rerun()
 
 if __name__ == "__main__":
     main()
