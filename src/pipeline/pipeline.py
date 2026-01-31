@@ -54,9 +54,9 @@ class MisinformationPipeline:
             SyntheticDetectorStage(),   # D4: Synthetic media detection
             CrossModalDetectorStage(),  # D2: Cross-modal inconsistency
             ContextDetectorStage(),     # D3: Out-of-context detection (SerpApi)
-            # RobustnessStage(),          # D6: Robustness checks (PENDING)
+            RobustnessStage(),          # D6: Robustness checks
             ExplanationGeneratorStage(), # D5: Explanation generation
-            # EvaluationStage(),          # D7: Quantitative evaluation (PENDING)
+            EvaluationStage(),          # D7: Quantitative evaluation
         ]
     
     def run(

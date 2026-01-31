@@ -400,7 +400,7 @@ def main():
             file_type = uploaded_file.type.split('/')[0]
             if file_type == "image":
                 image = Image.open(uploaded_file).convert("RGB")
-                st.image(image, caption="Analyzed Media", use_container_width=True)
+                st.image(image, caption="Analyzed Media", use_column_width=True)
             elif file_type == "video":
                 st.video(uploaded_file)
                 st.info("Video upload successful. System will analyze context.")
