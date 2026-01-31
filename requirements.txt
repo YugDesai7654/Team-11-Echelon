@@ -19,3 +19,7 @@ tenacity
 duckduckgo-search
 sentencepiece
 protobuf
+
+# Out-of-context detection (Reverse Image Search)
+google-search-results  # SerpApi client
+python-dateutil  # Date parsing

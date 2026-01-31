@@ -53,7 +53,7 @@ class MisinformationPipeline:
             InputHandlerStage(),        # D1: Multi-modal input handling
             SyntheticDetectorStage(),   # D4: Synthetic media detection
             CrossModalDetectorStage(),  # D2: Cross-modal inconsistency
-            # ContextDetectorStage(),     # D3: Out-of-context detection (PENDING)
+            ContextDetectorStage(),     # D3: Out-of-context detection (SerpApi)
             # RobustnessStage(),          # D6: Robustness checks (PENDING)
             ExplanationGeneratorStage(), # D5: Explanation generation
             # EvaluationStage(),          # D7: Quantitative evaluation (PENDING)
