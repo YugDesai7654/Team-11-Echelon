@@ -17,8 +17,16 @@ import requests
 import tempfile
 import os
 import base64
+import logging
 from io import BytesIO
 from dotenv import load_dotenv
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,7 +36,8 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
 # Hugging Face API endpoint for fake image detection
-HF_API_URL = "https://api-inference.huggingface.co/models/umm-maybe/AI-image-detector"
+# Using Vision Transformer (ViT) based deepfake detector - state-of-the-art as of 2026
+HF_API_URL = "https://api-inference.huggingface.co/models/prithivMLmods/Deep-Fake-Detector-v2-Model"
 
 # ============================================================================
 # DELIVERABLE #1: Multi-modal input handling (text + image and/or video)
@@ -116,7 +125,7 @@ def frame_to_base64(frame):
     return buffer.tobytes()
 
 
-def analyze_frame_for_deepfake(frame_bytes):
+def analyze_frame_for_deepfake(frame_bytes, max_retries=3):
     """
     Sends a frame to Hugging Face API for deepfake/AI-generated image detection.
     
@@ -124,48 +133,67 @@ def analyze_frame_for_deepfake(frame_bytes):
     
     Args:
         frame_bytes: JPEG encoded image bytes
+        max_retries: Maximum number of retries if model is loading
         
     Returns:
         float or None: Fake probability (0-1) or None if API fails
     """
+    import time
+    
     headers = {
         "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
         "Content-Type": "application/octet-stream"
     }
     
-    try:
-        response = requests.post(
-            HF_API_URL, 
-            headers=headers, 
-            data=frame_bytes,
-            timeout=30  # 30 second timeout
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            # Parse the response to find the "artificial" or "fake" probability
-            for item in result:
-                label = item.get("label", "").lower()
-                if "artificial" in label or "fake" in label or "ai" in label:
-                    return item.get("score", 0)
-            # If no explicit fake label, return 1 - real probability
-            for item in result:
-                label = item.get("label", "").lower()
-                if "human" in label or "real" in label:
-                    return 1 - item.get("score", 1)
-            return 0.5  # Default if labels not recognized
-        elif response.status_code == 503:
-            # Model is loading
-            return None
-        else:
-            return None
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                HF_API_URL, 
+                headers=headers, 
+                data=frame_bytes,
+                timeout=60  # 60 second timeout
+            )
             
-    except requests.exceptions.Timeout:
-        st.warning("⚠️ Hugging Face API timeout. The model might be loading.")
-        return None
-    except requests.exceptions.RequestException as e:
-        st.warning(f"⚠️ Hugging Face API error: {str(e)}")
-        return None
+            if response.status_code == 200:
+                result = response.json()
+                # Parse the response to find the "artificial" or "fake" probability
+                for item in result:
+                    label = item.get("label", "").lower()
+                    if "artificial" in label or "fake" in label or "ai" in label:
+                        return item.get("score", 0)
+                # If no explicit fake label, return 1 - real probability
+                for item in result:
+                    label = item.get("label", "").lower()
+                    if "human" in label or "real" in label:
+                        return 1 - item.get("score", 1)
+                return 0.5  # Default if labels not recognized
+            elif response.status_code == 503:
+                # Model is loading - wait and retry
+                try:
+                    error_data = response.json()
+                    wait_time = error_data.get("estimated_time", 20)
+                except:
+                    wait_time = 20
+                if attempt < max_retries - 1:
+                    st.info(f"🔄 Model is loading... waiting {wait_time:.0f}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(min(wait_time, 30))  # Cap wait time at 30 seconds
+                    continue
+                return None
+            else:
+                st.warning(f"⚠️ Hugging Face API returned status {response.status_code}")
+                return None
+                
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                st.warning(f"⚠️ Timeout, retrying... (attempt {attempt + 1}/{max_retries})")
+                continue
+            st.warning("⚠️ Hugging Face API timeout after all retries.")
+            return None
+        except requests.exceptions.RequestException as e:
+            st.warning(f"⚠️ Hugging Face API error: {str(e)}")
+            return None
+    
+    return None
 
 
 def calculate_deepfake_score(frames):
@@ -221,10 +249,12 @@ def generate_explanation_with_gemini(text_claim, deepfake_score, frame_scores):
         tuple: (verdict, explanation)
     """
     try:
-        import google.generativeai as genai
+        from google import genai
         
-        genai.configure(api_key=GOOGLE_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        logger.info("Initializing Gemini client...")
+        # Initialize the client with API key
+        client = genai.Client(api_key=GOOGLE_API_KEY)
+        logger.info("Gemini client initialized successfully")
         
         # Format the score information
         if deepfake_score == "Unknown":
@@ -232,9 +262,13 @@ def generate_explanation_with_gemini(text_claim, deepfake_score, frame_scores):
             score_percentage = "Unknown"
         else:
             score_percentage = f"{deepfake_score * 100:.1f}%"
+            frame_score_str = ", ".join([
+                f"{s*100:.1f}%" if s is not None else "Unknown" 
+                for s in frame_scores
+            ])
             score_info = f"""
             - Average AI-Generated Probability: {score_percentage}
-            - Frame-by-frame scores: Start={frame_scores[0]}, Middle={frame_scores[1]}, End={frame_scores[2]}
+            - Frame-by-frame scores: {frame_score_str}
             - A score above 50% suggests the video may contain AI-generated or manipulated content.
             """
         
@@ -263,8 +297,14 @@ def generate_explanation_with_gemini(text_claim, deepfake_score, frame_scores):
         [Your detailed explanation]
         """
         
-        response = model.generate_content(prompt)
+        logger.info("Sending request to Gemini API with model: models/gemini-1.5-flash")
+        response = client.models.generate_content(
+            model="models/gemini-1.5-flash",
+            contents=[prompt]
+        )
         response_text = response.text
+        logger.info("Successfully received response from Gemini API")
+        logger.debug(f"Response preview: {response_text[:200]}...")
         
         # Parse the response
         if "VERDICT:" in response_text and "EXPLANATION:" in response_text:
@@ -276,7 +316,12 @@ def generate_explanation_with_gemini(text_claim, deepfake_score, frame_scores):
             return "ANALYSIS COMPLETE", response_text
             
     except Exception as e:
+        logger.error(f"Gemini API Error: {type(e).__name__}: {str(e)}")
+        import traceback
+        logger.error(f"Full traceback:\n{traceback.format_exc()}")
         return "ERROR", f"Failed to generate explanation: {str(e)}"
+
+
 
 
 # ============================================================================
@@ -400,13 +445,34 @@ def main():
     - ✅ **#5**: Natural language explanation generation citing concrete evidence
     """)
     
+    # Log API configuration at startup
+    logger.info("="*60)
+    logger.info("🚀 STREAMLIT APP STARTED")
+    logger.info("="*60)
+    logger.info(f"📍 Working Directory: {os.getcwd()}")
+    
     # Check for API keys
     if not GOOGLE_API_KEY:
+        logger.error("❌ GOOGLE_API_KEY not found!")
         st.error("⚠️ GOOGLE_API_KEY not found in .env file!")
         st.stop()
+    else:
+        masked_key = f"{GOOGLE_API_KEY[:8]}...{GOOGLE_API_KEY[-4:]}" if len(GOOGLE_API_KEY) > 12 else "***"
+        logger.info(f"✅ Google Gemini API Key: {masked_key}")
+        logger.info(f"🤖 Using Model: models/gemini-1.5-flash")
+        logger.info(f"🔗 API Endpoint: https://generativelanguage.googleapis.com/")
+    
     if not HUGGINGFACE_API_KEY:
+        logger.error("❌ HUGGINGFACE_API_KEY not found!")
         st.error("⚠️ HUGGINGFACE_API_KEY not found in .env file!")
         st.stop()
+    else:
+        masked_hf_key = f"{HUGGINGFACE_API_KEY[:8]}...{HUGGINGFACE_API_KEY[-4:]}" if len(HUGGINGFACE_API_KEY) > 12 else "***"
+        logger.info(f"✅ Hugging Face API Key: {masked_hf_key}")
+        logger.info(f"🔬 Deepfake Model: prithivMLmods/Deep-Fake-Detector-v2-Model (ViT-based)")
+        logger.info(f"🔗 HF API Endpoint: {HF_API_URL}")
+    
+    logger.info("="*60)
     
     st.markdown("---")
     
