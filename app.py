@@ -120,8 +120,7 @@ def main():
                     # Note: detect_misinformation now handles CLIP internally if image is provided
                     result = detect_misinformation(
                         claim_text, 
-                        image=image,
-                        clip_score=0.0 # Will be recalculated by function
+                        image=image
                     )
                 except Exception as e:
                     st.error(f"Analysis Failed: {str(e)}")
@@ -165,6 +164,39 @@ def main():
                     st.json(result)
                     if "clip_score" in result:
                         st.metric("Visual-Text Consistency (CLIP)", f"{result['clip_score']:.2f}")
+
+                # --- AI Detection Results ---
+                st.markdown("### 🤖 Synthetic Media Detection")
+                
+                ai_col1, ai_col2 = st.columns(2)
+                
+                with ai_col1:
+                    ai_text = result.get("ai_text_result", {})
+                    ai_prob_text = ai_text.get("ai_probability", 0)
+                    ai_label_text = ai_text.get("label", "Unknown")
+                    
+                    st.metric(
+                        "Text AI Probability", 
+                        f"{ai_prob_text:.1%}", 
+                        delta=f"Label: {ai_label_text}",
+                        delta_color="inverse" if ai_label_text == "Human" else "normal"
+                    )
+                    
+                with ai_col2:
+                    ai_image = result.get("ai_image_result", {})
+                    if ai_image:
+                        ai_prob_image = ai_image.get("confidence_score", 0)
+                        is_ai = ai_image.get("is_ai_generated", False)
+                        
+                        st.metric(
+                            "Image AI Probability", 
+                            f"{ai_prob_image:.1%}",
+                            delta="Detected as AI" if is_ai else "Likely Real",
+                            delta_color="off" if not is_ai else "normal"
+                        )
+                    else:
+                        st.info("No image analyzed for AI artifacts.")
+
 
         else:
             st.warning("Please enter a claim to verify.")
