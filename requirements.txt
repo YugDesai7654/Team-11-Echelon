@@ -26,3 +26,6 @@ python-dateutil  # Date parsing
 
 # AI Image Detection (HuggingFace)
 accelerate  # Required for SigLIP model
+
+# Chat with Evidence feature
+groq  # Llama3 for chat interface
