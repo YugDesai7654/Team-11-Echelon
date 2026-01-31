@@ -192,7 +192,7 @@ class SyntheticDetectorStage(PipelineStage):
             response_text = get_gemini_response(
                 prompt,
                 media_content=image,
-                model_name="gemini-flash-lite-latest",
+                model_name="gemini-2.5-flash",
                 generation_config=generation_config
             )
             

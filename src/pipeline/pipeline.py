@@ -23,6 +23,7 @@ from .stages import (
     ExplanationGeneratorStage,
     RobustnessStage,
     EvaluationStage,
+    VideoAnalysisStage,
 )
 
 
@@ -51,6 +52,7 @@ class MisinformationPipeline:
         """Get default pipeline stages in execution order."""
         return [
             InputHandlerStage(),        # D1: Multi-modal input handling
+            VideoAnalysisStage(),       # Video Analysis (Holistic)
             SyntheticDetectorStage(),   # D4: Synthetic media detection
             CrossModalDetectorStage(),  # D2: Cross-modal inconsistency
             # ContextDetectorStage(),     # D3: Out-of-context detection (PENDING)
@@ -161,6 +163,22 @@ class MisinformationPipeline:
             result.explanation = exp.data.get("explanation", "")
             result.evidence = exp.data.get("evidence", [])
         
+        # Get video analysis results
+        vid = stage_results.get(StageType.VIDEO_ANALYSIS)
+        if vid and vid.success:
+            # Overwrite or augment results with video analysis data
+            result.verdict = vid.data.get("verdict", result.verdict)
+            result.truthfulness_score = vid.data.get("truthfulness_score", result.truthfulness_score)
+            result.explanation = vid.data.get("explanation", result.explanation)
+            result.cross_modal_score = vid.data.get("cross_modal_similarity", result.cross_modal_score)
+            
+            # Map video specific fields
+            if vid.data.get("is_synthetic"):
+                result.ai_image_probability = 0.95 # High prob if video is deepfake
+                result.raw_data["is_video_synthetic"] = True
+            
+            result.raw_data["video_analysis"] = vid.data
+
         # Add CLIP score to raw data for UI
         result.raw_data["clip_score"] = result.cross_modal_score
 

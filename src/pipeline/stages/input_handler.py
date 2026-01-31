@@ -140,18 +140,46 @@ class InputHandlerStage(PipelineStage):
             return None, {"image_load_error": str(e)}
     
     def _process_video(self, video_path: str) -> Dict:
-        """Process video input - extract key frames if needed."""
-        # For now, just validate the path exists
+        """Process video input - upload to Gemini and wait for processing."""
         import os
-        if os.path.exists(video_path):
+        import google.generativeai as genai
+        
+        if not os.path.exists(video_path):
+             return {
+                "video_path": video_path,
+                "video_exists": False,
+            }
+
+        try:
+            print(f"Uploading video {video_path} to Gemini...")
+            video_file = genai.upload_file(path=video_path)
+            
+            while video_file.state.name == "PROCESSING":
+                print("Waiting for video processing...")
+                time.sleep(2)
+                video_file = genai.get_file(video_file.name)
+            
+            if video_file.state.name == "FAILED":
+                 return {
+                    "video_path": video_path,
+                    "video_exists": True,
+                    "gemini_video_file": None,
+                    "video_upload_error": "Gemini video processing failed"
+                }
+
             return {
                 "video_path": video_path,
                 "video_exists": True,
+                "gemini_video_file": video_file
             }
-        return {
-            "video_path": video_path,
-            "video_exists": False,
-        }
+            
+        except Exception as e:
+            return {
+                "video_path": video_path,
+                "video_exists": True,
+                "gemini_video_file": None,
+                "video_upload_error": str(e)
+            }
     
     def _determine_modality(self, processed_data: Dict) -> str:
         """Determine the modality of the input."""

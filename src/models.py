@@ -28,7 +28,7 @@ def configure_gemini():
     wait=wait_exponential(multiplier=1, min=4, max=10),
     reraise=True
 )
-def get_gemini_response(prompt_text, media_content=None, model_name="gemini-flash-lite-latest", generation_config=None, tools=None):
+def get_gemini_response(prompt_text, media_content=None, model_name="gemini-2.5-flash", generation_config=None, tools=None):
     """
     Generates a response from the Gemini model.
     Retries on transient errors (like 429).

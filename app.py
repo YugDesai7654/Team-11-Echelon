@@ -400,7 +400,7 @@ def main():
             file_type = uploaded_file.type.split('/')[0]
             if file_type == "image":
                 image = Image.open(uploaded_file).convert("RGB")
-                st.image(image, caption="Analyzed Media", use_container_width=True)
+                st.image(image, caption="Analyzed Media", use_column_width=True)
             elif file_type == "video":
                 st.video(uploaded_file)
                 st.info("Video upload successful. System will analyze context.")
@@ -431,11 +431,19 @@ def main():
                 
                 progress_bar.progress(10, text="Loading models...")
                 
+                # Save temp video file if needed
+                video_path = None
+                if image is None and uploaded_file is not None and uploaded_file.type.startswith("video"):
+                    with open("temp_video.mp4", "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    video_path = "temp_video.mp4"
+
                 # Run the pipeline
                 pipeline = MisinformationPipeline()
                 pipeline_result = pipeline.run(
                     text=claim_text,
-                    image=image
+                    image=image,
+                    video_path=video_path
                 )
                 
                 progress_bar.progress(100, text="Pipeline complete!")

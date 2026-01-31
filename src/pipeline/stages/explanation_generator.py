@@ -67,7 +67,7 @@ class ExplanationGeneratorStage(PipelineStage):
             response_text = get_gemini_response(
                 prompt,
                 media_content=pipeline_input.image if pipeline_input.image else None,
-                model_name="gemini-flash-lite-latest",
+                model_name="gemini-2.5-flash",
                 generation_config=generation_config
             )
             

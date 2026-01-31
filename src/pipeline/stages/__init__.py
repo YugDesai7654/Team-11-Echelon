@@ -9,6 +9,7 @@ from .synthetic_detector import SyntheticDetectorStage
 from .explanation_generator import ExplanationGeneratorStage
 from .robustness import RobustnessStage
 from .evaluation import EvaluationStage
+from .video_analysis import VideoAnalysisStage
 
 __all__ = [
     "InputHandlerStage",
@@ -18,4 +19,5 @@ __all__ = [
     "ExplanationGeneratorStage",
     "RobustnessStage",
     "EvaluationStage",
+    "VideoAnalysisStage",
 ]

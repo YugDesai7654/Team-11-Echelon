@@ -17,6 +17,7 @@ class StageType(Enum):
     SYNTHETIC_DETECTION = "synthetic_detection"
     EXPLANATION_GENERATION = "explanation_generation"
     ROBUSTNESS_CHECK = "robustness_check"
+    VIDEO_ANALYSIS = "video_analysis"
     EVALUATION = "evaluation"
 
 
