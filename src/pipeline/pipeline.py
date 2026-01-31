@@ -113,6 +113,13 @@ class MisinformationPipeline:
             stage_results[stage.stage_type] = stage_result
             result.add_stage_result(stage_result)
             
+            # After input handling, extract video frames if available
+            if stage.stage_type == StageType.INPUT_HANDLING and stage_result.success:
+                video_frames = stage_result.data.get("video_frames", [])
+                if video_frames:
+                    pipeline_input.video_frames = video_frames
+                    print(f"  Extracted {len(video_frames)} video frames for analysis")
+            
             if stage_result.success:
                 print(f"  ✓ {stage.name} completed ({stage_result.execution_time_ms:.0f}ms)")
             else:
@@ -130,10 +137,14 @@ class MisinformationPipeline:
     def _aggregate_results(self, result: PipelineResult, stage_results: Dict[StageType, StageResult]):
         """Aggregate results from all stages into final output."""
         
-        # Get cross-modal score
+        # Get cross-modal score (for images use CLIP similarity, for videos use confidence)
         cm = stage_results.get(StageType.CROSS_MODAL_DETECTION)
         if cm and cm.success:
-            result.cross_modal_score = cm.data.get("similarity", 0.0)
+            if cm.data.get("analysis_type") == "video_gemini":
+                result.cross_modal_score = cm.data.get("confidence", 0.0)
+            else:
+                result.cross_modal_score = cm.data.get("similarity", 0.0)
+            result.raw_data["cross_modal_analysis"] = cm.data
         
         # Get synthetic detection scores
         syn = stage_results.get(StageType.SYNTHETIC_DETECTION)
@@ -142,6 +153,10 @@ class MisinformationPipeline:
             result.ai_image_probability = syn.data.get("ai_image_probability", 0.0)
             result.raw_data["ai_text_result"] = syn.data.get("text_detection", {})
             result.raw_data["ai_image_result"] = syn.data.get("image_detection")
+            # Add video/deepfake data
+            result.raw_data["deepfake_probability"] = syn.data.get("deepfake_probability", 0.0)
+            result.raw_data["video_detection"] = syn.data.get("video_detection")
+            result.raw_data["is_deepfake"] = syn.data.get("is_deepfake", False)
         
         # Get context score
         ctx = stage_results.get(StageType.CONTEXT_DETECTION)

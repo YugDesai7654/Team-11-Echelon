@@ -67,7 +67,7 @@ class ExplanationGeneratorStage(PipelineStage):
             response_text = get_gemini_response(
                 prompt,
                 media_content=pipeline_input.image if pipeline_input.image else None,
-                model_name="gemini-flash-lite-latest",
+                model_name="gemini-2.5-flash",
                 generation_config=generation_config
             )
             
@@ -138,7 +138,20 @@ class ExplanationGeneratorStage(PipelineStage):
             text_label = synthetic_result.data.get("text_label", "Unknown")
             prompt += f"AI Text Probability: {text_prob:.2%} (Label: {text_label})\n"
             
-            if is_multimodal:
+            # Video deepfake detection
+            if synthetic_result.data.get("video_detection"):
+                deepfake_prob = synthetic_result.data.get("deepfake_probability", 0)
+                is_deepfake = synthetic_result.data.get("is_deepfake", False)
+                frames_analyzed = synthetic_result.data.get("frames_analyzed", 0)
+                
+                prompt += f"\n**VIDEO DEEPFAKE DETECTION:**\n"
+                prompt += f"- Deepfake Probability: {deepfake_prob:.2%}\n"
+                prompt += f"- Is Deepfake: {'YES' if is_deepfake else 'NO'}\n"
+                prompt += f"- Frames Analyzed: {frames_analyzed}\n"
+                
+                if is_deepfake:
+                    prompt += "[WARNING: Video shows signs of AI manipulation/deepfake!]\n"
+            elif is_multimodal:
                 image_prob = synthetic_result.data.get("ai_image_probability", 0)
                 is_ai_image = synthetic_result.data.get("is_ai_image", False)
                 artifacts = synthetic_result.data.get("image_artifacts", [])
@@ -151,19 +164,48 @@ class ExplanationGeneratorStage(PipelineStage):
         if is_multimodal:
             cross_modal_result = previous_results.get(StageType.CROSS_MODAL_DETECTION)
             if cross_modal_result and cross_modal_result.success:
-                similarity = cross_modal_result.data.get("similarity", 0)
+                analysis_type = cross_modal_result.data.get("analysis_type", "image_clip")
                 cm_verdict = cross_modal_result.data.get("verdict", "Unknown")
                 cm_explanation = cross_modal_result.data.get("explanation", "")
+                confidence = cross_modal_result.data.get("confidence", 0)
                 
-                prompt += (
-                    f"\nContext from CLIP Analysis:\n"
-                    f"- Semantic Similarity: {similarity:.2f}\n"
-                    f"- Cross-Modal Verdict: {cm_verdict}\n"
-                    f"- Automatic Explanation: {cm_explanation}\n"
-                )
-                
-                if similarity < 0.20:
-                    prompt += " [(IMPORTANT) The CLIP score is VERY LOW. The image likely has nothing to do with the text.]\n"
+                if analysis_type == "video_gemini":
+                    # Video analysis from Gemini Vision
+                    people = cross_modal_result.data.get("people_identified", [])
+                    action = cross_modal_result.data.get("action_description", "")
+                    location = cross_modal_result.data.get("location", "")
+                    mismatch = cross_modal_result.data.get("mismatch_details", "")
+                    
+                    prompt += (
+                        f"\n**VIDEO ANALYSIS (Gemini Vision):**\n"
+                        f"- Analysis Type: Video Frame Analysis\n"
+                        f"- People Identified in Video: {', '.join(people) if people else 'Unknown'}\n"
+                        f"- Action in Video: {action}\n"
+                        f"- Location: {location}\n"
+                        f"- Cross-Modal Verdict: {cm_verdict}\n"
+                        f"- Confidence: {confidence:.2%}\n"
+                    )
+                    
+                    if mismatch and mismatch != 'None':
+                        prompt += f"- ⚠️ MISMATCH DETECTED: {mismatch}\n"
+                        prompt += "[CRITICAL: The video shows different content than claimed. This is likely MISINFORMATION!]\n"
+                    
+                    prompt += f"- Explanation: {cm_explanation}\n"
+                    
+                    if cm_verdict == "Inconsistent":
+                        prompt += "[IMPORTANT: The video content DOES NOT match the claim. Mark as Fake/Misleading/Out-of-Context!]\n"
+                else:
+                    # Image analysis from CLIP
+                    similarity = cross_modal_result.data.get("similarity", 0)
+                    prompt += (
+                        f"\nContext from CLIP Analysis:\n"
+                        f"- Semantic Similarity: {similarity:.2f}\n"
+                        f"- Cross-Modal Verdict: {cm_verdict}\n"
+                        f"- Automatic Explanation: {cm_explanation}\n"
+                    )
+                    
+                    if similarity < 0.20:
+                        prompt += " [(IMPORTANT) The CLIP score is VERY LOW. The image likely has nothing to do with the text.]\n"
         
         # Context/search signals
         context_result = previous_results.get(StageType.CONTEXT_DETECTION)
@@ -177,16 +219,36 @@ class ExplanationGeneratorStage(PipelineStage):
         
         # Task instructions
         if is_multimodal:
-            prompt += (
-                "Task Instructions:\n"
-                "1. **Origin Analysis**: Based on the System Detection Signals and your own analysis, explicitly state if the text or image is AI-generated. NOTE: A claim can be AI-generated but still Factually TRUE.\n"
-                "2. **Identity & Context Verification**: Use the Web Search Results to verify the identities, events, and facts. Check for hallucinations common in AI text.\n"
-                "3. **Cross-Modal Consistency**: Does the image support the claim? If it's an AI image, is it being passed off as real footage?\n"
-                "4. **Truthfulness Assessment**: Final verdict on the TRUTH of the claim. \n"
-                "   - If Text is AI-generated + Factually Correct -> Verdict: 'Real' (with note 'AI-Drafted').\n"
-                "   - If Image is AI-generated + Passed as Real -> Verdict: 'Fake' or 'Misleading'.\n"
-                "5. **Explanation**: Clear reasoning.\n"
-            )
+            # Check if this is video analysis
+            cross_modal_result = previous_results.get(StageType.CROSS_MODAL_DETECTION)
+            is_video_analysis = (cross_modal_result and 
+                                cross_modal_result.data.get("analysis_type") == "video_gemini")
+            
+            if is_video_analysis:
+                prompt += (
+                    "\n**CRITICAL TASK - VIDEO CONTEXT VERIFICATION:**\n"
+                    "Your PRIMARY job is to determine if the VIDEO CONTENT matches the TEXT CLAIM.\n\n"
+                    "1. **PERSON VERIFICATION (MOST IMPORTANT)**: \n"
+                    "   - Check the 'People Identified in Video' field above.\n"
+                    "   - Does the claim mention the SAME person(s) shown in the video?\n"
+                    "   - If video shows Person A but claim says Person B -> This is MISINFORMATION!\n\n"
+                    "2. **EVENT/ACTION VERIFICATION**:\n"
+                    "   - Does the event/action in the video match what the claim describes?\n"
+                    "   - If claim says 'scoring century' but video shows something else -> Mismatch!\n\n"
+                    "3. **CONTEXT MISMATCH = FAKE/MISLEADING**:\n"
+                    "   - If the VIDEO ANALYSIS shows 'Inconsistent' verdict -> Mark as FAKE or OUT-OF-CONTEXT\n"
+                    "   - If there's a MISMATCH DETECTED -> This is MISINFORMATION, give LOW truthfulness score\n\n"
+                    "4. **IGNORE DEEPFAKE DETECTION for this assessment** - Focus only on whether the video content matches the claim.\n\n"
+                    "5. **Explanation**: Clearly state WHO is in the video and whether that matches the claimed person.\n"
+                )
+            else:
+                prompt += (
+                    "Task Instructions:\n"
+                    "1. **Cross-Modal Consistency**: Does the image content match the claim? Look at who/what is shown.\n"
+                    "2. **Identity Verification**: Use the Web Search Results to verify identities and facts.\n"
+                    "3. **Truthfulness Assessment**: Final verdict on whether the claim matches the media.\n"
+                    "4. **Explanation**: Clear reasoning about whether the image supports the claim.\n"
+                )
         else:
             prompt += (
                 "Task Instructions:\n"

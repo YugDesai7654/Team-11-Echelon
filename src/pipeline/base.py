@@ -29,6 +29,7 @@ class PipelineInput:
     text: str
     image: Optional[Image.Image] = None
     video_path: Optional[str] = None
+    video_frames: Optional[List[Image.Image]] = None  # Extracted frames from video
     media_path: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     
@@ -38,8 +39,11 @@ class PipelineInput:
     def has_video(self) -> bool:
         return self.video_path is not None
     
+    def has_video_frames(self) -> bool:
+        return self.video_frames is not None and len(self.video_frames) > 0
+    
     def is_multimodal(self) -> bool:
-        return self.has_image() or self.has_video()
+        return self.has_image() or self.has_video() or self.has_video_frames()
 
 
 @dataclass
