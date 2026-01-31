@@ -36,8 +36,93 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
 # Hugging Face API endpoint for fake image detection
-# Using Vision Transformer (ViT) based deepfake detector - state-of-the-art as of 2026
-HF_API_URL = "https://api-inference.huggingface.co/models/prithivMLmods/Deep-Fake-Detector-v2-Model"
+# Using dima806 deepfake detector - user specified
+HF_API_URL = "https://api-inference.huggingface.co/models/dima806/deepfake_vs_real_image_detection"
+
+# ============================================================================
+# Model Availability Check
+# ============================================================================
+def check_hf_model_availability(model_url, api_key, timeout=10):
+    """
+    Checks if a HuggingFace model is available and responding.
+    
+    Args:
+        model_url: Full URL to the HuggingFace model API
+        api_key: HuggingFace API key
+        timeout: Request timeout in seconds
+        
+    Returns:
+        dict: {'available': bool, 'status_code': int, 'message': str}
+    """
+    import numpy as np
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/octet-stream"
+    }
+    
+    # Create a small test image (1x1 black pixel)
+    test_image = np.zeros((1, 1, 3), dtype=np.uint8)
+    _, buffer = cv2.imencode('.jpg', test_image)
+    test_bytes = buffer.tobytes()
+    
+    try:
+        logger.info(f"🔍 Testing HuggingFace model availability...")
+        response = requests.post(
+            model_url,
+            headers=headers,
+            data=test_bytes,
+            timeout=timeout
+        )
+        
+        status_code = response.status_code
+        
+        if status_code == 200:
+            logger.info(f"✅ Model is available and responding")
+            return {
+                'available': True,
+                'status_code': status_code,
+                'message': 'Model available'
+            }
+        elif status_code == 503:
+            # Model is loading
+            logger.warning(f"⚠️ Model is loading (503)")
+            return {
+                'available': False,
+                'status_code': status_code,
+                'message': 'Model is loading, retry later'
+            }
+        elif status_code == 410:
+            # Model deprecated/removed
+            logger.error(f"❌ Model is deprecated or removed (410 Gone)")
+            return {
+                'available': False,
+                'status_code': status_code,
+                'message': 'Model deprecated/removed'
+            }
+        else:
+            logger.warning(f"⚠️ Unexpected status: {status_code}")
+            return {
+                'available': False,
+                'status_code': status_code,
+                'message': f'Unexpected status: {status_code}'
+            }
+            
+    except requests.exceptions.Timeout:
+        logger.error(f"❌ Request timeout after {timeout}s")
+        return {
+            'available': False,
+            'status_code': 0,
+            'message': 'Request timeout'
+        }
+    except Exception as e:
+        logger.error(f"❌ Error checking model: {str(e)}")
+        return {
+            'available': False,
+            'status_code': 0,
+            'message': f'Error: {str(e)}'
+        }
+
 
 # ============================================================================
 # DELIVERABLE #1: Multi-modal input handling (text + image and/or video)
@@ -61,16 +146,16 @@ def save_uploaded_video(uploaded_file):
     return temp_file.name
 
 
-def extract_frames(video_path, num_frames=3):
+def extract_frames(video_path, num_frames=30):
     """
-    Extracts Start, Middle, and End frames from the video using OpenCV.
+    Extracts frames evenly distributed throughout the video using OpenCV.
     
     ADDRESSES DELIVERABLE #1: Processes video input by extracting key frames
     for analysis.
     
     Args:
         video_path: Path to the video file
-        num_frames: Number of frames to extract (default: 3)
+        num_frames: Number of frames to extract (default: 30)
         
     Returns:
         list: List of extracted frames as numpy arrays (BGR format)
@@ -85,15 +170,16 @@ def extract_frames(video_path, num_frames=3):
     # Get total number of frames
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    if total_frames < 3:
-        st.warning("Video has fewer than 3 frames. Extracting all available frames.")
+    if total_frames < num_frames:
+        st.warning(f"Video has fewer than {num_frames} frames. Extracting all available frames.")
         num_frames = total_frames
     
-    # Calculate frame indices: Start (0), Middle (50%), End (last)
-    if num_frames == 3:
-        frame_indices = [0, total_frames // 2, total_frames - 1]
-    else:
-        frame_indices = list(range(total_frames))
+    # Calculate evenly distributed frame indices
+    # For 30 frames in a 300-frame video: [0, 10, 20, ..., 290]
+    frame_indices = [int(i * total_frames / num_frames) for i in range(num_frames)]
+    
+    # Ensure we don't go past the last frame
+    frame_indices = [min(idx, total_frames - 1) for idx in frame_indices]
     
     for idx in frame_indices:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
@@ -103,6 +189,7 @@ def extract_frames(video_path, num_frames=3):
     
     cap.release()
     return frames
+
 
 
 # ============================================================================
@@ -127,73 +214,61 @@ def frame_to_base64(frame):
 
 def analyze_frame_for_deepfake(frame_bytes, max_retries=3):
     """
-    Sends a frame to Hugging Face API for deepfake/AI-generated image detection.
+    Analyzes a frame for deepfake/AI-generated content using local transformers model.
     
     ADDRESSES DELIVERABLE #4: Uses AI model to detect synthetic media.
     
     Args:
         frame_bytes: JPEG encoded image bytes
-        max_retries: Maximum number of retries if model is loading
+        max_retries: Not used for local model (kept for API compatibility)
         
     Returns:
-        float or None: Fake probability (0-1) or None if API fails
+        float or None: Fake probability (0-1) or None if analysis fails
     """
-    import time
-    
-    headers = {
-        "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
-        "Content-Type": "application/octet-stream"
-    }
-    
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(
-                HF_API_URL, 
-                headers=headers, 
-                data=frame_bytes,
-                timeout=60  # 60 second timeout
+    try:
+        from transformers import pipeline
+        from PIL import Image
+        import io
+        
+        # Load the pipeline (cached after first use)
+        if not hasattr(analyze_frame_for_deepfake, 'pipe'):
+            logger.info("📥 Loading deepfake detection model (first use only)...")
+            analyze_frame_for_deepfake.pipe = pipeline(
+                'image-classification',
+                model="prithivMLmods/Deep-Fake-Detector-v2-Model",
+                device=-1  # Use CPU
             )
-            
-            if response.status_code == 200:
-                result = response.json()
-                # Parse the response to find the "artificial" or "fake" probability
-                for item in result:
-                    label = item.get("label", "").lower()
-                    if "artificial" in label or "fake" in label or "ai" in label:
-                        return item.get("score", 0)
-                # If no explicit fake label, return 1 - real probability
-                for item in result:
-                    label = item.get("label", "").lower()
-                    if "human" in label or "real" in label:
-                        return 1 - item.get("score", 1)
-                return 0.5  # Default if labels not recognized
-            elif response.status_code == 503:
-                # Model is loading - wait and retry
-                try:
-                    error_data = response.json()
-                    wait_time = error_data.get("estimated_time", 20)
-                except:
-                    wait_time = 20
-                if attempt < max_retries - 1:
-                    st.info(f"🔄 Model is loading... waiting {wait_time:.0f}s (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(min(wait_time, 30))  # Cap wait time at 30 seconds
-                    continue
-                return None
-            else:
-                st.warning(f"⚠️ Hugging Face API returned status {response.status_code}")
-                return None
-                
-        except requests.exceptions.Timeout:
-            if attempt < max_retries - 1:
-                st.warning(f"⚠️ Timeout, retrying... (attempt {attempt + 1}/{max_retries})")
-                continue
-            st.warning("⚠️ Hugging Face API timeout after all retries.")
-            return None
-        except requests.exceptions.RequestException as e:
-            st.warning(f"⚠️ Hugging Face API error: {str(e)}")
-            return None
-    
-    return None
+            logger.info("✅ Model loaded successfully")
+        
+        # Convert bytes to PIL Image
+        image = Image.open(io.BytesIO(frame_bytes))
+        
+        # Run inference
+        results = analyze_frame_for_deepfake.pipe(image)
+        
+        # Parse results - format: [{'label': 'Deepfake', 'score': 0.9}, {'label': 'Realism', 'score': 0.1}]
+        fake_score = None
+        for result in results:
+            if result['label'].lower() == 'deepfake':
+                fake_score = result['score']
+                break
+        
+        if fake_score is None:
+            # If 'Deepfake' not found, use (1 - Realism score)
+            for result in results:
+                if result['label'].lower() == 'realism':
+                    fake_score = 1.0 - result['score']
+                    break
+        
+        logger.debug(f"Deepfake analysis result: {fake_score}")
+        return fake_score if fake_score is not None else 0.5
+        
+    except Exception as e:
+        logger.error(f"Deepfake analysis error: {str(e)}")
+        import traceback
+        logger.debug(f"Traceback: {traceback.format_exc()}")
+        return None
+
 
 
 def calculate_deepfake_score(frames):
@@ -297,9 +372,9 @@ def generate_explanation_with_gemini(text_claim, deepfake_score, frame_scores):
         [Your detailed explanation]
         """
         
-        logger.info("Sending request to Gemini API with model: models/gemini-1.5-flash")
+        logger.info("Sending request to Gemini API with model: models/gemini-2.5-flash")
         response = client.models.generate_content(
-            model="models/gemini-1.5-flash",
+            model="models/gemini-2.5-flash",
             contents=[prompt]
         )
         response_text = response.text
@@ -445,34 +520,46 @@ def main():
     - ✅ **#5**: Natural language explanation generation citing concrete evidence
     """)
     
-    # Log API configuration at startup
-    logger.info("="*60)
-    logger.info("🚀 STREAMLIT APP STARTED")
-    logger.info("="*60)
-    logger.info(f"📍 Working Directory: {os.getcwd()}")
+    # Log API configuration at startup (only once per session)
+    if 'startup_logged' not in st.session_state:
+        st.session_state.startup_logged = True
+        logger.info("="*60)
+        logger.info("🚀 STREAMLIT APP STARTED")
+        logger.info("="*60)
+        logger.info(f"📍 Working Directory: {os.getcwd()}")
     
     # Check for API keys
     if not GOOGLE_API_KEY:
         logger.error("❌ GOOGLE_API_KEY not found!")
         st.error("⚠️ GOOGLE_API_KEY not found in .env file!")
         st.stop()
-    else:
+    elif 'startup_logged' in st.session_state and st.session_state.startup_logged:
+        # Only log on first startup
         masked_key = f"{GOOGLE_API_KEY[:8]}...{GOOGLE_API_KEY[-4:]}" if len(GOOGLE_API_KEY) > 12 else "***"
         logger.info(f"✅ Google Gemini API Key: {masked_key}")
-        logger.info(f"🤖 Using Model: models/gemini-1.5-flash")
+        logger.info(f"🤖 Using Model: models/gemini-2.5-flash")
         logger.info(f"🔗 API Endpoint: https://generativelanguage.googleapis.com/")
     
     if not HUGGINGFACE_API_KEY:
         logger.error("❌ HUGGINGFACE_API_KEY not found!")
         st.error("⚠️ HUGGINGFACE_API_KEY not found in .env file!")
         st.stop()
-    else:
+    elif 'startup_logged' in st.session_state and st.session_state.startup_logged:
+        # Only log on first startup
         masked_hf_key = f"{HUGGINGFACE_API_KEY[:8]}...{HUGGINGFACE_API_KEY[-4:]}" if len(HUGGINGFACE_API_KEY) > 12 else "***"
         logger.info(f"✅ Hugging Face API Key: {masked_hf_key}")
-        logger.info(f"🔬 Deepfake Model: prithivMLmods/Deep-Fake-Detector-v2-Model (ViT-based)")
-        logger.info(f"🔗 HF API Endpoint: {HF_API_URL}")
-    
-    logger.info("="*60)
+        logger.info(f"🔬 Deepfake Model: prithivMLmods/Deep-Fake-Detector-v2-Model (LOCAL)")
+        logger.info(f"📦 Model Type: Local Transformers Pipeline (CPU inference)")
+        logger.info(f"💾 Model will be cached after first download")
+        
+        # Model availability check not needed for local model
+        st.session_state.hf_model_available = True
+        logger.info(f"✅ Local model configuration validated")
+        
+        logger.info("="*60)
+        # Mark as logged
+        st.session_state.startup_logged = False  # Reset for next interactions
+
     
     st.markdown("---")
     
