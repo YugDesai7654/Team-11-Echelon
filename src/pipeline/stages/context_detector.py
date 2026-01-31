@@ -190,7 +190,7 @@ class ContextDetectorStage(PipelineStage):
                     "context_flags": ["api_config_failed"]
                 }
 
-            text = get_gemini_response(prompt, model_name="gemini-flash-lite-latest")
+            text = get_gemini_response(prompt, model_name="gemini-2.5-flash")
             
             # Simple parsing of AI response
             is_ooc = "OUT OF CONTEXT" in text.upper()

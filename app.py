@@ -73,12 +73,27 @@ def display_deliverable_results(pipeline_result, has_image):
             with col1:
                 st.metric("Text Length", f"{data.get('text_length', 0)} chars")
             with col2:
-                st.metric("Has Image", "✅ Yes" if data.get('has_image') else "❌ No")
+                has_media = "✅ Yes" if data.get('has_image') or data.get('has_video') else "❌ No"
+                st.metric("Has Media", has_media)
             with col3:
                 st.metric("Modality", data.get('modality', 'unknown').upper())
             
             if data.get('has_image'):
                 st.info(f"📐 Image: {data.get('image_width', 'N/A')}x{data.get('image_height', 'N/A')} ({data.get('image_mode', 'N/A')})")
+            
+            # Display video information
+            if data.get('has_video'):
+                st.markdown("**🎬 Video Information:**")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Resolution", f"{data.get('video_width', 'N/A')}x{data.get('video_height', 'N/A')}")
+                with col2:
+                    duration = data.get('video_duration_seconds', 0)
+                    st.metric("Duration", f"{duration:.1f}s")
+                with col3:
+                    st.metric("Frames Extracted", data.get('extracted_frame_count', 0))
+                
+                st.info(f"📹 Video: {data.get('video_frame_count', 'N/A')} total frames @ {data.get('video_fps', 'N/A'):.1f} FPS")
             
             st.success(f"✅ Completed in {input_result.execution_time_ms:.0f}ms")
         else:
@@ -87,39 +102,90 @@ def display_deliverable_results(pipeline_result, has_image):
     # ═══════════════════════════════════════════════════════════════
     # DELIVERABLE 2: Cross-Modal Inconsistency Detection
     # ═══════════════════════════════════════════════════════════════
-    with st.expander("🔗 **D2: Cross-Modal Inconsistency Detection** - CLIP Text-Image Analysis", expanded=True):
+    with st.expander("🔗 **D2: Cross-Modal Inconsistency Detection** - Text-Media Analysis", expanded=True):
         cross_modal_result = pipeline_result.get_stage_result(StageType.CROSS_MODAL_DETECTION)
         if cross_modal_result and cross_modal_result.success:
             data = cross_modal_result.data
+            analysis_type = data.get('analysis_type', 'image_clip')
             
-            # Similarity gauge
-            similarity = data.get('similarity', 0)
-            verdict = data.get('verdict', 'N/A')
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("CLIP Similarity", f"{similarity:.4f}", 
-                         delta="Aligned" if similarity > 0.25 else "Mismatched",
-                         delta_color="normal" if similarity > 0.25 else "inverse")
-            with col2:
-                st.metric("Verdict", verdict)
-            with col3:
-                st.metric("Confidence", f"{data.get('confidence', 0):.1%}")
-            
-            # Visual indicator
-            if similarity >= 0.30:
-                st.success("✅ **Consistent**: Caption and image are semantically aligned")
-            elif similarity >= 0.25:
-                st.warning("⚠️ **Possible Mismatch**: Weak alignment detected")
+            if analysis_type == "video_gemini":
+                # Video analysis using Gemini Vision
+                st.markdown("**🎬 Video Analysis (Gemini Vision)**")
+                
+                verdict = data.get('verdict', 'N/A')
+                confidence = data.get('confidence', 0)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Frames Analyzed", data.get('frames_analyzed', 0))
+                with col2:
+                    st.metric("Verdict", verdict)
+                with col3:
+                    st.metric("Confidence", f"{confidence:.1%}")
+                
+                # People identified
+                people = data.get('people_identified', [])
+                if people:
+                    st.markdown("**👤 People Identified:**")
+                    st.write(", ".join(people))
+                
+                # Action/Location
+                col1, col2 = st.columns(2)
+                with col1:
+                    action = data.get('action_description', 'N/A')
+                    if action:
+                        st.markdown(f"**🎬 Action:** {action}")
+                with col2:
+                    location = data.get('location', 'N/A')
+                    if location:
+                        st.markdown(f"**📍 Location:** {location}")
+                
+                # Mismatch details
+                mismatch = data.get('mismatch_details', '')
+                if mismatch and mismatch != 'None':
+                    st.error(f"🚨 **Mismatch Detected:** {mismatch}")
+                
+                # Visual verdict
+                if verdict == "Consistent":
+                    st.success("✅ **Consistent**: Video content matches the claim")
+                elif verdict == "Inconsistent":
+                    st.error("🚨 **Inconsistent**: Video content does NOT match the claim")
+                else:
+                    st.warning("⚠️ **Uncertain**: Could not fully verify claim against video")
+                
+                st.markdown("**Explanation:**")
+                st.info(data.get('explanation', 'N/A'))
             else:
-                st.error("🚨 **Inconsistent**: Caption does NOT match image content")
-            
-            st.markdown("**Explanation:**")
-            st.info(data.get('explanation', 'N/A'))
+                # Image analysis using CLIP
+                st.markdown("**🖼️ Image Analysis (CLIP)**")
+                
+                similarity = data.get('similarity', 0)
+                verdict = data.get('verdict', 'N/A')
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("CLIP Similarity", f"{similarity:.4f}", 
+                             delta="Aligned" if similarity > 0.25 else "Mismatched",
+                             delta_color="normal" if similarity > 0.25 else "inverse")
+                with col2:
+                    st.metric("Verdict", verdict)
+                with col3:
+                    st.metric("Confidence", f"{data.get('confidence', 0):.1%}")
+                
+                # Visual indicator
+                if similarity >= 0.30:
+                    st.success("✅ **Consistent**: Caption and image are semantically aligned")
+                elif similarity >= 0.25:
+                    st.warning("⚠️ **Possible Mismatch**: Weak alignment detected")
+                else:
+                    st.error("🚨 **Inconsistent**: Caption does NOT match image content")
+                
+                st.markdown("**Explanation:**")
+                st.info(data.get('explanation', 'N/A'))
             
             st.success(f"✅ Completed in {cross_modal_result.execution_time_ms:.0f}ms")
         elif not has_image:
-            st.info("⏭️ **Skipped**: No image provided for cross-modal analysis")
+            st.info("⏭️ **Skipped**: No image or video provided for cross-modal analysis")
         else:
             st.error(f"❌ Failed: {cross_modal_result.error if cross_modal_result else 'Unknown error'}")
     
@@ -179,7 +245,44 @@ def display_deliverable_results(pipeline_result, has_image):
             with col3:
                 st.metric("Raw Score", f"{data.get('text_detection', {}).get('raw_score', 0):.4f}")
             
-            if has_image:
+            # Video Deepfake Detection
+            if data.get('video_detection'):
+                st.markdown("#### 🎬 Video Deepfake Detection")
+                video_data = data.get('video_detection', {})
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    deepfake_prob = data.get('deepfake_probability', 0)
+                    st.metric("Deepfake Probability", f"{deepfake_prob:.1%}",
+                             delta="🚨 Likely Fake" if data.get('is_deepfake') else "✅ Likely Real",
+                             delta_color="inverse" if data.get('is_deepfake') else "normal")
+                with col2:
+                    st.metric("Frames Analyzed", data.get('frames_analyzed', 0))
+                with col3:
+                    ai_frames = video_data.get('ai_frame_count', 0)
+                    total_frames = video_data.get('frames_analyzed', 1)
+                    st.metric("AI Frames Detected", f"{ai_frames}/{total_frames}")
+                
+                # Frame-by-frame results
+                frame_results = video_data.get('frame_results', [])
+                if frame_results:
+                    st.markdown("**Frame-by-Frame Analysis:**")
+                    frame_cols = st.columns(len(frame_results))
+                    for i, (col, fr) in enumerate(zip(frame_cols, frame_results)):
+                        with col:
+                            prob = fr.get('ai_probability', 0)
+                            label = "🤖 AI" if fr.get('is_ai_generated') else "📷 Real"
+                            st.metric(f"Frame {i+1}", f"{prob:.1%}", delta=label,
+                                     delta_color="inverse" if fr.get('is_ai_generated') else "normal")
+                
+                # Verdict
+                if data.get('is_deepfake'):
+                    st.error("🚨 **DEEPFAKE DETECTED**: Video frames show signs of AI generation or manipulation")
+                else:
+                    st.success("✅ **Video appears authentic**: No significant AI manipulation detected")
+            
+            # Image Detection
+            elif has_image:
                 st.markdown("#### 🖼️ AI Image Detection")
                 if data.get('image_detection'):
                     col1, col2 = st.columns(2)
@@ -393,9 +496,10 @@ def main():
 
     with col1:
         st.header("1. Upload Evidence")
-        uploaded_file = st.file_uploader("Upload Image or Video", type=["jpg", "jpeg", "png", "mp4"])
+        uploaded_file = st.file_uploader("Upload Image or Video", type=["jpg", "jpeg", "png", "mp4", "avi", "mov", "webm"])
         
         image = None
+        video_path = None
         if uploaded_file is not None:
             file_type = uploaded_file.type.split('/')[0]
             if file_type == "image":
@@ -403,7 +507,12 @@ def main():
                 st.image(image, caption="Analyzed Media", use_column_width=True)
             elif file_type == "video":
                 st.video(uploaded_file)
-                st.info("Video upload successful. System will analyze context.")
+                # Save video to temp file for processing
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp_file:
+                    tmp_file.write(uploaded_file.read())
+                    video_path = tmp_file.name
+                st.info("📹 Video uploaded! Frames will be extracted and analyzed using Gemini Vision + Deepfake Detection.")
 
     with col2:
         st.header("2. Claim to Verify")
@@ -435,7 +544,8 @@ def main():
                 pipeline = MisinformationPipeline()
                 pipeline_result = pipeline.run(
                     text=claim_text,
-                    image=image
+                    image=image,
+                    video_path=video_path
                 )
                 
                 progress_bar.progress(100, text="Pipeline complete!")

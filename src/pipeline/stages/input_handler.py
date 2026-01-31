@@ -140,18 +140,79 @@ class InputHandlerStage(PipelineStage):
             return None, {"image_load_error": str(e)}
     
     def _process_video(self, video_path: str) -> Dict:
-        """Process video input - extract key frames if needed."""
-        # For now, just validate the path exists
+        """Process video input - extract key frames using OpenCV."""
         import os
-        if os.path.exists(video_path):
+        import cv2
+        
+        if not os.path.exists(video_path):
+            return {
+                "video_path": video_path,
+                "video_exists": False,
+                "video_frames": [],
+            }
+        
+        try:
+            # Open video file
+            cap = cv2.VideoCapture(video_path)
+            
+            if not cap.isOpened():
+                return {
+                    "video_path": video_path,
+                    "video_exists": True,
+                    "video_error": "Could not open video file",
+                    "video_frames": [],
+                }
+            
+            # Get video properties
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            duration = total_frames / fps if fps > 0 else 0
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            # Extract 10 frames evenly distributed across the video
+            num_frames_to_extract = 10
+            if total_frames < num_frames_to_extract:
+                # If video has fewer frames, extract all
+                frame_positions = list(range(total_frames))
+            else:
+                # Evenly distribute frames across the video
+                step = total_frames / num_frames_to_extract
+                frame_positions = [int(i * step) for i in range(num_frames_to_extract)]
+            
+            extracted_frames = []
+            
+            for pos in frame_positions:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+                ret, frame = cap.read()
+                if ret:
+                    # Convert BGR to RGB
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    # Convert to PIL Image
+                    pil_image = Image.fromarray(frame_rgb)
+                    extracted_frames.append(pil_image)
+            
+            cap.release()
+            
             return {
                 "video_path": video_path,
                 "video_exists": True,
+                "video_frames": extracted_frames,
+                "video_frame_count": total_frames,
+                "video_fps": fps,
+                "video_duration_seconds": duration,
+                "video_width": width,
+                "video_height": height,
+                "extracted_frame_count": len(extracted_frames),
             }
-        return {
-            "video_path": video_path,
-            "video_exists": False,
-        }
+            
+        except Exception as e:
+            return {
+                "video_path": video_path,
+                "video_exists": True,
+                "video_error": str(e),
+                "video_frames": [],
+            }
     
     def _determine_modality(self, processed_data: Dict) -> str:
         """Determine the modality of the input."""

@@ -85,7 +85,7 @@ class SyntheticDetectorStage(PipelineStage):
             
             # Detect AI image if image is provided
             if pipeline_input.image is not None:
-                print("Running AI Image Detection (Gemini)...")
+                print("Running AI Image Detection...")
                 image_result = self._detect_ai_image(pipeline_input.image)
                 data["image_detection"] = image_result
                 data["ai_image_probability"] = image_result.get("confidence_score", 0.0)
@@ -95,6 +95,20 @@ class SyntheticDetectorStage(PipelineStage):
                 data["image_detection"] = None
                 data["ai_image_probability"] = 0.0
                 data["is_ai_image"] = False
+            
+            # Detect deepfake in video frames if provided
+            if pipeline_input.video_frames and len(pipeline_input.video_frames) > 0:
+                print(f"Running Deepfake Detection on {len(pipeline_input.video_frames)} video frames...")
+                video_result = self._detect_video_deepfake(pipeline_input.video_frames)
+                data["video_detection"] = video_result
+                data["deepfake_probability"] = video_result.get("average_ai_probability", 0.0)
+                data["is_deepfake"] = video_result.get("is_deepfake", False)
+                data["frame_results"] = video_result.get("frame_results", [])
+                data["frames_analyzed"] = video_result.get("frames_analyzed", 0)
+            else:
+                data["video_detection"] = None
+                data["deepfake_probability"] = 0.0
+                data["is_deepfake"] = False
             
             # Compute overall synthetic score
             data["overall_synthetic_score"] = self._compute_overall_score(data)
@@ -229,6 +243,44 @@ class SyntheticDetectorStage(PipelineStage):
                 "error": str(e)
             }
     
+    def _detect_video_deepfake(self, video_frames: list) -> Dict:
+        """
+        Detect deepfake/AI-generated content in video frames.
+        Analyzes each frame and returns averaged results.
+        """
+        frame_results = []
+        total_ai_prob = 0.0
+        
+        for i, frame in enumerate(video_frames):
+            print(f"  Analyzing frame {i+1}/{len(video_frames)}...")
+            result = self._detect_ai_image(frame)
+            frame_results.append({
+                "frame_index": i,
+                "ai_probability": result.get("confidence_score", 0.0),
+                "is_ai_generated": result.get("is_ai_generated", False),
+                "label": result.get("predicted_label", "Unknown")
+            })
+            total_ai_prob += result.get("confidence_score", 0.0)
+        
+        # Calculate average probability
+        num_frames = len(video_frames)
+        avg_ai_prob = total_ai_prob / num_frames if num_frames > 0 else 0.0
+        
+        # Determine if video is likely a deepfake (threshold: 0.5)
+        is_deepfake = avg_ai_prob > 0.5
+        
+        # Count how many frames were detected as AI-generated
+        ai_frame_count = sum(1 for r in frame_results if r["is_ai_generated"])
+        
+        return {
+            "frames_analyzed": num_frames,
+            "frame_results": frame_results,
+            "average_ai_probability": avg_ai_prob,
+            "is_deepfake": is_deepfake,
+            "ai_frame_count": ai_frame_count,
+            "verdict": "Likely Deepfake" if is_deepfake else "Likely Authentic"
+        }
+    
     def _compute_overall_score(self, data: Dict) -> float:
         """
         Compute overall synthetic media score.
@@ -236,9 +288,24 @@ class SyntheticDetectorStage(PipelineStage):
         """
         text_prob = data.get("ai_text_probability", 0.0)
         image_prob = data.get("ai_image_probability", 0.0)
+        video_prob = data.get("deepfake_probability", 0.0)
         
-        # Weight text and image equally if both present
+        # Count how many media types we have
+        weights = []
+        scores = [text_prob]  # Always include text
+        weights.append(1.0)
+        
         if data.get("image_detection"):
-            return (text_prob + image_prob) / 2
-        else:
-            return text_prob
+            scores.append(image_prob)
+            weights.append(1.0)
+        
+        if data.get("video_detection"):
+            scores.append(video_prob)
+            weights.append(1.5)  # Weight video slightly higher
+        
+        # Weighted average
+        total_weight = sum(weights)
+        weighted_sum = sum(s * w for s, w in zip(scores, weights))
+        
+        return weighted_sum / total_weight if total_weight > 0 else text_prob
+
