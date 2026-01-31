@@ -170,39 +170,59 @@ class SyntheticDetectorStage(PipelineStage):
     
     def _detect_ai_image(self, image: Image.Image) -> Dict:
         """
-        Detect if image is AI-generated using Gemini vision analysis.
+        Detect if image is AI-generated using HuggingFace SigLIP-based detector.
+        Model: Ateeqq/ai-vs-human-image-detector
         """
         try:
-            from src.models import get_gemini_response, configure_gemini
+            import torch
+            from transformers import AutoImageProcessor, SiglipForImageClassification
             
-            configure_gemini()
+            MODEL_ID = "Ateeqq/ai-vs-human-image-detector"
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             
-            prompt = (
-                "Analyze this image specifically for signs that it is AI-generated/synthetic. "
-                "Look for: artificial textures, inconsistent lighting, distorted hands/text/limbs, "
-                "hyper-realism typical of Midjourney/DALL-E, or perfect symmetry. "
-                "Return a JSON with:"
-                "- 'is_ai_generated': boolean,"
-                "- 'confidence_score': 0.0 to 1.0 (probability it is AI),"
-                "- 'artifacts': list of strings describing specific visual artifacts found (if any)."
-            )
+            # Load model and processor
+            processor = AutoImageProcessor.from_pretrained(MODEL_ID)
+            model = SiglipForImageClassification.from_pretrained(MODEL_ID)
+            model.to(device)
+            model.eval()
             
-            generation_config = {"response_mime_type": "application/json"}
+            # Preprocess the image
+            rgb_image = image.convert("RGB")
+            inputs = processor(images=rgb_image, return_tensors="pt").to(device)
             
-            response_text = get_gemini_response(
-                prompt,
-                media_content=image,
-                model_name="gemini-flash-lite-latest",
-                generation_config=generation_config
-            )
+            # Run inference
+            with torch.no_grad():
+                outputs = model(**inputs)
+                logits = outputs.logits
             
-            # Clean response
-            cleaned_text = response_text.replace("```json", "").replace("```", "").strip()
-            result_json = json.loads(cleaned_text)
+            # Get predictions
+            predicted_class_idx = logits.argmax(-1).item()
+            predicted_label = model.config.id2label[predicted_class_idx]
             
-            return result_json
+            # Get probabilities
+            probabilities = torch.softmax(logits, dim=-1)
+            predicted_prob = probabilities[0, predicted_class_idx].item()
+            
+            # Get AI probability specifically
+            # The model labels are 'ai' and 'hum' (human)
+            ai_prob = 0.0
+            for i, label in model.config.id2label.items():
+                if label.lower() == "ai":
+                    ai_prob = probabilities[0, i].item()
+                    break
+            
+            is_ai = predicted_label.lower() == "ai"
+            
+            return {
+                "is_ai_generated": is_ai,
+                "confidence_score": ai_prob,
+                "predicted_label": predicted_label,
+                "predicted_confidence": predicted_prob,
+                "artifacts": ["AI-generated patterns detected"] if is_ai else []
+            }
             
         except Exception as e:
+            print(f"  ⚠️ AI Image Detection Error: {e}")
             return {
                 "is_ai_generated": False,
                 "confidence_score": 0.0,

@@ -23,3 +23,6 @@ protobuf
 # Out-of-context detection (Reverse Image Search)
 google-search-results  # SerpApi client
 python-dateutil  # Date parsing
+
+# AI Image Detection (HuggingFace)
+accelerate  # Required for SigLIP model
